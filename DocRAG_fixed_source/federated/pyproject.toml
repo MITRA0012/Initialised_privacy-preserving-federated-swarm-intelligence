@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "docrag-kin-federated"
+version = "0.1.0"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "flwr[simulation,dp]>=1.39,<2",
+  "dp-accounting>=0.4.3,<1",
+  "torch>=2.5,<3",
+  "transformers>=4.48,<5",
+  "peft>=0.14,<1",
+  "datasets>=3,<5",
+  "accelerate>=1.2,<2",
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.34,<1",
+]
+
+[tool.flwr.app]
+publisher = "docrag-kin"
+fab-format-version = 1
+
+[tool.flwr.app.components]
+serverapp = "kin_federated.server_app:app"
+clientapp = "kin_federated.client_app:app"
+
+[tool.flwr.app.config]
+model-name = "Qwen/Qwen2.5-0.5B-Instruct"
+rounds = 5
+min-clusters = 3
+noise-multiplier = 2.0
+clipping-norm = 1.0
+target-delta = 0.00001
+max-epsilon = 8.0
+num-shares = 0.8
+reconstruction-threshold = 0.67
+local-epochs = 1
+learning-rate = 0.00005
+max-seq-length = 512
+
+[tool.hatch.build.targets.wheel]
+packages = ["kin_federated"]

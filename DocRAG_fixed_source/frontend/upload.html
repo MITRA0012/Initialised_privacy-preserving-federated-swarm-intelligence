@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Upload documents · DocRAG</title>
+<style>
+:root{color-scheme:dark;--bg:#0b0c0f;--surface:#13151a;--border:#262932;--accent:#5eff8a;--text:#e8eaf0;--muted:#8c93a1}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px system-ui,sans-serif;min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(620px,100%);background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:32px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:32px}.brand{font-size:22px;font-weight:800}.brand span{color:var(--accent)}a{color:var(--accent);text-decoration:none}.drop{display:block;border:2px dashed var(--border);border-radius:14px;padding:42px 20px;text-align:center;cursor:pointer}.drop:hover,.drop.over{border-color:var(--accent);background:#5eff8a0a}.drop input{display:none}.icon{font-size:40px}h1{font-size:25px;margin:10px 0}p{color:var(--muted)}button{background:var(--accent);border:0;border-radius:9px;padding:12px 20px;font-weight:700;cursor:pointer}button:disabled{opacity:.5;cursor:wait}.actions{display:flex;justify-content:space-between;align-items:center;margin-top:20px}.status{margin-top:20px;white-space:pre-wrap;color:var(--muted);line-height:1.6}.selected{margin-top:12px;color:var(--accent);font-size:14px}
+</style>
+</head>
+<body><main class="card">
+  <div class="top"><div class="brand">Doc<span>RAG</span></div><div><a href="/files.html">Uploaded files</a> &nbsp;·&nbsp; <a href="/">Search</a></div></div>
+  <h1>Upload documents</h1><p>Choose PDF or Word (.docx) files to index and save in your local database.</p>
+  <label class="drop" id="drop"><input id="files" type="file" accept=".pdf,.docx" multiple><div class="icon">📄</div><strong>Drop files here or click to browse</strong><p>PDF and DOCX</p></label>
+  <div id="selected" class="selected"></div><div class="actions"><span>Original files are stored in SQLite.</span><button id="submit" disabled>Upload files</button></div>
+  <div id="status" class="status" role="status"></div>
+</main>
+<script>
+const input=document.getElementById('files'),drop=document.getElementById('drop'),submit=document.getElementById('submit');let chosen=[];
+function setFiles(files){chosen=[...files];document.getElementById('selected').textContent=chosen.map(f=>`${f.name} (${(f.size/1024).toFixed(0)} KB)`).join(' · ');submit.disabled=!chosen.length}
+input.addEventListener('change',()=>setFiles(input.files));for(const ev of ['dragenter','dragover'])drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('over')});for(const ev of ['dragleave','drop'])drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over')});drop.addEventListener('drop',e=>setFiles(e.dataTransfer.files));
+submit.addEventListener('click',async()=>{submit.disabled=true;const status=document.getElementById('status');status.textContent='';for(const file of chosen){status.textContent+=`Uploading ${file.name}…\n`;const form=new FormData();form.append('file',file);try{const response=await fetch('/upload',{method:'POST',body:form});const result=await response.json();if(!response.ok)throw new Error(result.detail||'Upload failed');status.textContent+=result.indexed?`File saved and indexed (${result.chunks} chunks).\n`:`File saved; search indexing is pending: ${result.message||'Ollama is not ready.'}\n`}catch(error){status.textContent+=`Failed: ${error.message}\n`}}const link=document.createElement('a');link.href='/files.html';link.textContent='View uploaded files';status.append(link);submit.disabled=false});
+</script></body></html>

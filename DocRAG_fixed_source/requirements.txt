@@ -1,0 +1,8 @@
+﻿fastapi
+uvicorn
+chromadb
+pypdf
+python-docx
+python-multipart
+httpx
+cryptography>=3.1

@@ -1,0 +1,7 @@
+node_modules/
+.runtime/
+__pycache__/
+venv/
+.venv/
+.env
+*.zip

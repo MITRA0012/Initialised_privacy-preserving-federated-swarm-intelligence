@@ -1,0 +1,51 @@
+{
+    "name": "docrag",
+    "version": "1.0.0",
+    "description": "Local PDF & Word document Q&A powered by Ollama",
+    "main": "electron/main.js",
+    "scripts": {
+        "start": "electron .",
+        "build": "electron-builder --win --x64",
+        "build:mac": "electron-builder --mac",
+        "build:linux": "electron-builder --linux"
+    },
+    "build": {
+        "appId": "com.docrag.app",
+        "productName": "DocRAG",
+        "directories": {
+            "output": "dist"
+        },
+        "files": [
+            "electron/**/*",
+            "frontend/**/*",
+            "backend/**/*",
+            "requirements.txt",
+            "!backend/__pycache__",
+            "!**/*.pyc"
+        ],
+        "win": {
+            "target": "nsis",
+            "icon": "electron/icon.ico"
+        },
+        "mac": {
+            "target": "dmg",
+            "icon": "electron/icon.icns"
+        },
+        "linux": {
+            "target": "AppImage"
+        },
+        "nsis": {
+            "oneClick": false,
+            "allowToChangeInstallationDirectory": true,
+            "createDesktopShortcut": true,
+            "createStartMenuShortcut": true
+        }
+    },
+    "devDependencies": {
+        "electron": "^30.5.1",
+        "electron-builder": "^24.0.0"
+    },
+    "dependencies": {
+        "pip": "^0.0.1"
+    }
+}
