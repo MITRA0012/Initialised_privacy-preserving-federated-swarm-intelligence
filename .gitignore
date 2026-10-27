@@ -5,3 +5,6 @@ venv/
 .venv/
 .env
 *.zip
+
+# nested git metadata (renamed .git folders)
+.git_old/
