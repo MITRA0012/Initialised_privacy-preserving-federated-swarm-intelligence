@@ -1,4 +1,4 @@
-import os, sys, uuid, asyncio, sqlite3, io, re, time, copy, json, logging, hashlib, shutil, socket, subprocess
+import os, sys, uuid, asyncio, sqlite3, io, re, time, copy, json, logging, hashlib, subprocess
 from collections import OrderedDict
 from pathlib import Path
 from typing import List, Literal
@@ -88,10 +88,12 @@ with get_db() as db:
     db.execute("CREATE INDEX IF NOT EXISTS idx_cluster_chat_owner ON cluster_chat_messages(group_id,user_id,created_at)")
     db.execute("""CREATE TABLE IF NOT EXISTS cluster_federation_settings (
         group_id TEXT PRIMARY KEY REFERENCES groups(id) ON DELETE CASCADE,
-        superlink_address TEXT NOT NULL DEFAULT '', root_cert_path TEXT NOT NULL DEFAULT '',
-        private_key_path TEXT NOT NULL DEFAULT '', inference_port INTEGER NOT NULL DEFAULT 11435,
+        adapter_dir TEXT NOT NULL DEFAULT '', inference_port INTEGER NOT NULL DEFAULT 11435,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )""")
+    federation_columns = {row["name"] for row in db.execute("PRAGMA table_info(cluster_federation_settings)")}
+    if "adapter_dir" not in federation_columns:  # databases created before DocRAG became consume-only
+        db.execute("ALTER TABLE cluster_federation_settings ADD COLUMN adapter_dir TEXT NOT NULL DEFAULT ''")
     db.execute("""CREATE TABLE IF NOT EXISTS doc_chunks (
         chunk_id TEXT PRIMARY KEY, doc_id TEXT NOT NULL, filename TEXT NOT NULL,
         chunk_num INTEGER NOT NULL, content TEXT NOT NULL
@@ -209,52 +211,30 @@ class ClusterHistoryRequest(BaseModel):
     messages: list[dict] = Field(default_factory=list, max_length=100)
 
 class FederationConfigRequest(BaseModel):
-    superlink_address: str = Field(min_length=3, max_length=255)
-    root_cert_path: str = Field(min_length=1, max_length=1000)
-    private_key_path: str = Field(min_length=1, max_length=1000)
+    adapter_dir: str = Field(min_length=1, max_length=1000)
     inference_port: int = Field(default=11435, ge=1024, le=65535)
 
+# DocRAG only CONSUMES the shared federated adapter for its General bot. It never joins the federation,
+# never reads its own documents for training, and runs no Flower client: only a loopback inference service.
 _federated_processes: dict[str, dict[str, subprocess.Popen]] = {}
 FEDERATED_PROJECT_DIR = Path(__file__).resolve().parents[1] / "federated"
 FEDERATED_LOCAL_DIR = Path.home() / ".docrag_federated"
 
 def _federation_settings(group_id: str):
     with get_db() as db:
-        row = db.execute("SELECT * FROM cluster_federation_settings WHERE group_id=?", (group_id,)).fetchone()
-    return dict(row) if row else {"group_id": group_id, "superlink_address": "", "root_cert_path": "", "private_key_path": "", "inference_port": 11435, "updated_at": None}
-
-def _flower_executable() -> str | None:
-    candidate = shutil.which("flower-supernode")
-    if candidate:
-        return candidate
-    scripts = Path(sys.executable).parent
-    for name in ("flower-supernode.exe", "flower-supernode"):
-        path = scripts / name
-        if path.is_file(): return str(path)
-    return None
+        row = db.execute("SELECT group_id,adapter_dir,inference_port,updated_at FROM cluster_federation_settings WHERE group_id=?", (group_id,)).fetchone()
+    return dict(row) if row else {"group_id": group_id, "adapter_dir": "", "inference_port": 11435, "updated_at": None}
 
 def _runtime_status(group_id: str):
     running = _federated_processes.get(group_id, {})
     return {name: ("running" if proc.poll() is None else "stopped") for name, proc in running.items()}
 
 def _validate_federation_config(config: dict):
-    address = config["superlink_address"].strip()
-    if not re.fullmatch(r"(?:\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+):[1-9][0-9]{0,4}", address):
-        raise HTTPException(422, "Coordinator address must be host:port (IPv6 must use [address]:port).")
-    port = int(address.rsplit(":", 1)[1])
-    if port > 65535: raise HTTPException(422, "Coordinator port must be between 1 and 65535.")
-    for field, label in (("root_cert_path", "CA certificate"), ("private_key_path", "Flower client private key")):
-        path = Path(config[field]).expanduser()
-        if not path.is_absolute() or not path.is_file():
-            raise HTTPException(422, f"Choose an existing absolute path for the {label}.")
-        config[field] = str(path.resolve())
-    config["superlink_address"] = address
+    path = Path(str(config.get("adapter_dir", "")).strip()).expanduser()
+    if not path.is_absolute():
+        raise HTTPException(422, "Choose an absolute path for the folder that holds the aggregated adapter.")
+    config["adapter_dir"] = str(path.resolve())
     return config
-
-def _free_local_port():
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
 
 def _identity(authorization: str | None):
     token = (authorization or "").removeprefix("Bearer ").strip()
@@ -291,18 +271,17 @@ def federated_status(authorization: str | None = Header(default=None)):
     config = _federation_settings(actor["group_id"])
     try:
         import importlib.util
-        missing = [name for name in ("flwr", "torch", "transformers", "peft", "fastapi", "uvicorn") if importlib.util.find_spec(name) is None]
+        missing = [name for name in ("torch", "transformers", "peft", "fastapi", "uvicorn") if importlib.util.find_spec(name) is None]
     except Exception:
-        missing = ["federation Python packages"]
-    health = {"running": False, "adapter_ready": False, "round": -1}
+        missing = ["inference Python packages"]
+    health = {"running": False, "ready": False, "round": -1}
     try:
         response = httpx.get(f"http://127.0.0.1:{config['inference_port']}/health", timeout=0.7)
         if response.is_success: health = {"running": True, **response.json()}
     except Exception:
         pass
-    return {"config": config, "processes": _runtime_status(actor["group_id"]), "inference": health,
-            "flower_available": bool(_flower_executable()), "python": sys.executable,
-            "missing_packages": missing, "federated_project_exists": (FEDERATED_PROJECT_DIR / "kin_federated" / "client_app.py").is_file()}
+    return {"config": config, "processes": _runtime_status(actor["group_id"]), "inference": health, "python": sys.executable,
+            "missing_packages": missing, "federated_project_exists": (FEDERATED_PROJECT_DIR / "kin_federated" / "inference_service.py").is_file()}
 
 @app.put("/federated/config")
 def save_federated_config(req: FederationConfigRequest, authorization: str | None = Header(default=None)):
@@ -311,38 +290,34 @@ def save_federated_config(req: FederationConfigRequest, authorization: str | Non
         raise HTTPException(403, "Host or subhost access is required to configure this cluster.")
     config = _validate_federation_config(req.dict())
     with get_db() as db:
-        db.execute("INSERT INTO cluster_federation_settings(group_id,superlink_address,root_cert_path,private_key_path,inference_port,updated_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(group_id) DO UPDATE SET superlink_address=excluded.superlink_address,root_cert_path=excluded.root_cert_path,private_key_path=excluded.private_key_path,inference_port=excluded.inference_port,updated_at=CURRENT_TIMESTAMP",
-                   (actor["group_id"], config["superlink_address"], config["root_cert_path"], config["private_key_path"], config["inference_port"]))
-    return {"saved": True, "superlink_address": config["superlink_address"], "root_cert_path": config["root_cert_path"], "inference_port": config["inference_port"]}
+        db.execute("INSERT INTO cluster_federation_settings(group_id,adapter_dir,inference_port,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(group_id) DO UPDATE SET adapter_dir=excluded.adapter_dir,inference_port=excluded.inference_port,updated_at=CURRENT_TIMESTAMP",
+                   (actor["group_id"], config["adapter_dir"], config["inference_port"]))
+    return {"saved": True, "adapter_dir": config["adapter_dir"], "inference_port": config["inference_port"]}
 
 @app.post("/federated/start")
 def start_federated_runtime(authorization: str | None = Header(default=None)):
     actor = _identity(authorization)
     if actor["role"] not in ("host", "subhost"):
-        raise HTTPException(403, "Host or subhost access is required to start this cluster client.")
+        raise HTTPException(403, "Host or subhost access is required to start local inference.")
     group_id = actor["group_id"]
     if any(state == "running" for state in _runtime_status(group_id).values()):
-        return {"started": False, "processes": _runtime_status(group_id), "message": "This cluster runtime is already running."}
+        return {"started": False, "processes": _runtime_status(group_id), "message": "Local inference is already running."}
     config = _federation_settings(group_id)
     try:
         _validate_federation_config(config)
     except HTTPException as error:
-        raise HTTPException(409, f"Save valid coordinator and certificate settings first. {error.detail}")
-    flower = _flower_executable()
-    if not flower:
-        raise HTTPException(503, "Flower is not installed in the DocRAG environment. Install the federated requirements, then refresh.")
+        raise HTTPException(409, f"Save the adapter folder first. {error.detail}")
     import importlib.util
-    missing = [name for name in ("flwr", "torch", "transformers", "peft", "uvicorn") if importlib.util.find_spec(name) is None]
+    missing = [name for name in ("torch", "transformers", "peft", "uvicorn") if importlib.util.find_spec(name) is None]
     if missing:
-        raise HTTPException(503, "Missing federated runtime packages: " + ", ".join(missing) + ". Install DocRAG_fixed_source/federated requirements in this Python environment.")
-    if not (FEDERATED_PROJECT_DIR / "kin_federated" / "client_app.py").is_file():
-        raise HTTPException(503, "Federated client package is missing from the workspace.")
-    artifact_dir = FEDERATED_LOCAL_DIR / group_id
-    artifact_dir.mkdir(parents=True, exist_ok=True)
+        raise HTTPException(503, "Missing inference packages: " + ", ".join(missing) + ". Install DocRAG_fixed_source/federated requirements in this Python environment.")
+    if not (FEDERATED_PROJECT_DIR / "kin_federated" / "inference_service.py").is_file():
+        raise HTTPException(503, "The local inference package is missing from the workspace.")
+    adapter_dir = Path(config["adapter_dir"])
+    adapter_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
-    env.update({"PYTHONPATH": str(FEDERATED_PROJECT_DIR) + os.pathsep + env.get("PYTHONPATH", ""),
-                "FEDERATED_DOCRAG_GROUP_ID": group_id, "DOCRAG_DB_PATH": str(DB_PATH),
-                "FEDERATED_ARTIFACT_DIR": str(artifact_dir), "FEDERATED_ADAPTER_DIR": str(artifact_dir)})
+    # Only the adapter folder is passed: no DocRAG database path, group id or Flower settings.
+    env.update({"PYTHONPATH": str(FEDERATED_PROJECT_DIR) + os.pathsep + env.get("PYTHONPATH", ""), "FEDERATED_ARTIFACT_DIR": str(adapter_dir)})
     logs_dir = FEDERATED_LOCAL_DIR / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     started: dict[str, subprocess.Popen] = {}
@@ -351,12 +326,8 @@ def start_federated_runtime(authorization: str | None = Header(default=None)):
         started["inference"] = subprocess.Popen([sys.executable, "-m", "uvicorn", "kin_federated.inference_service:app", "--host", "127.0.0.1", "--port", str(config["inference_port"])], cwd=str(FEDERATED_PROJECT_DIR), env=env, stdout=infer_log, stderr=subprocess.STDOUT)
         time.sleep(0.35)
         if started["inference"].poll() is not None: raise RuntimeError(f"Local inference service exited during startup. See {infer_log.name}.")
-        flower_log = (logs_dir / f"{group_id}-flower.log").open("ab")
-        started["flower"] = subprocess.Popen([flower, "--superlink", config["superlink_address"], "--root-certificates", config["root_cert_path"], "--auth-supernode-private-key", config["private_key_path"], "--host", "127.0.0.1", "--port", str(_free_local_port()), "--node-config", f"group-id={group_id}"], cwd=str(FEDERATED_PROJECT_DIR), env=env, stdout=flower_log, stderr=subprocess.STDOUT)
-        time.sleep(0.5)
-        if started["flower"].poll() is not None: raise RuntimeError(f"Flower client exited during startup. See {flower_log.name}.")
         _federated_processes[group_id] = started
-        return {"started": True, "processes": _runtime_status(group_id), "message": "Local inference and the secure Flower client were launched. Check the Flower log if the coordinator rejects this client."}
+        return {"started": True, "processes": _runtime_status(group_id), "message": "Local inference started. The General bot answers once an aggregated adapter is present in the adapter folder."}
     except Exception as error:
         for proc in started.values():
             if proc.poll() is None: proc.terminate()
@@ -366,7 +337,7 @@ def start_federated_runtime(authorization: str | None = Header(default=None)):
 def stop_federated_runtime(authorization: str | None = Header(default=None)):
     actor = _identity(authorization)
     if actor["role"] not in ("host", "subhost"):
-        raise HTTPException(403, "Host or subhost access is required to stop this cluster client.")
+        raise HTTPException(403, "Host or subhost access is required to stop local inference.")
     processes = _federated_processes.pop(actor["group_id"], {})
     for proc in processes.values():
         if proc.poll() is None: proc.terminate()

@@ -1,1 +1,1 @@
-"""Federated LoRA training for DocRAG and Kin private clusters."""
+"""Federated LoRA training for Kin instances; DocRAG only consumes the aggregate."""

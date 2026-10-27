@@ -1,9 +1,10 @@
-"""Each process reads private training examples locally and returns only DP-protected LoRA updates."""
+"""Each Kin instance reads its own shared library locally and returns only DP-protected LoRA updates.
+
+DocRAG documents are never read here: DocRAG only consumes the aggregate for its General bot."""
 from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import tempfile
 import uuid
 from pathlib import Path
@@ -39,7 +40,7 @@ def _save_received_global(model, round_id: int) -> None:
 
 
 def _load_local_records() -> list[dict[str, str]]:
-    """Read local library text from Kin JSONL or the DocRAG cluster's own database."""
+    """Read local library text from this Kin instance (knowledge.json, or an explicit JSONL file)."""
     filename = os.getenv("FEDERATED_DATA_FILE", "")
     kin_dir = os.getenv("FEDERATED_KIN_DATA_DIR", "").strip()
     records = []
@@ -58,19 +59,7 @@ def _load_local_records() -> list[dict[str, str]]:
             raise RuntimeError("Kin knowledge store has an invalid format.")
         records = [{"prompt": "Summarize the following private library passage accurately and retain its key facts.", "completion": doc["content"].strip()} for doc in library if isinstance(doc, dict) and isinstance(doc.get("content"), str) and doc["content"].strip()]
     else:
-        db_path = Path(os.getenv("DOCRAG_DB_PATH", str(Path.home() / "docrag.sqlite3"))).expanduser().resolve(strict=True)
-        group_id = os.getenv("FEDERATED_DOCRAG_GROUP_ID", "").strip()
-        if not group_id:
-            raise RuntimeError("Set FEDERATED_DATA_FILE for Kin or FEDERATED_DOCRAG_GROUP_ID for a DocRAG cluster.")
-        connection = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
-        try:
-            rows = connection.execute(
-                "SELECT c.content FROM doc_chunks c JOIN documents d ON d.id=c.doc_id "
-                "WHERE d.group_id=? AND d.index_status='indexed' ORDER BY d.id,c.chunk_num", (group_id,)
-            ).fetchall()
-        finally:
-            connection.close()
-        records = [{"prompt": "Summarize the following private library passage accurately and retain its key facts.", "completion": row[0].strip()} for row in rows if row[0] and row[0].strip()]
+        raise RuntimeError("Set FEDERATED_KIN_DATA_DIR to this Kin instance's data directory (or FEDERATED_DATA_FILE for an explicit JSONL file).")
     if not records:
         raise RuntimeError("The local cluster dataset has no usable prompt/completion examples.")
     return records

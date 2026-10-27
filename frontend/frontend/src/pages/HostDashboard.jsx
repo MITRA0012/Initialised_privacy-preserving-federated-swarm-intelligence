@@ -9,7 +9,7 @@ export default function HostDashboard() {
   const user = JSON.parse(localStorage.getItem("docragUser") || "{}");
   const [files, setFiles] = useState([]), [members, setMembers] = useState([]);
   const [instructions, setInstructions] = useState("");
-  const [federation, setFederation] = useState({ superlink_address: "", root_cert_path: "", private_key_path: "", inference_port: 11435 });
+  const [federation, setFederation] = useState({ adapter_dir: "", inference_port: 11435 });
   const [federationStatus, setFederationStatus] = useState(null);
   const [notice, setNotice] = useState(""), [member, setMember] = useState({ full_name: "", phone: "", unique_id: "", role: "user" });
   const navigate = useNavigate();
@@ -32,12 +32,12 @@ export default function HostDashboard() {
   async function saveFederation(event) {
     event.preventDefault();
     const response = await fetch(`${API}/federated/config`, { method: "PUT", headers: { ...headers(), "Content-Type": "application/json" }, body: JSON.stringify({ ...federation, inference_port: Number(federation.inference_port) }) });
-    const data = await response.json(); setNotice(response.ok ? "Federation connection saved for this group cluster." : data.detail || "Could not save federation settings.");
+    const data = await response.json(); setNotice(response.ok ? "Adapter folder saved for this group cluster." : data.detail || "Could not save settings.");
     if (response.ok) refresh();
   }
   async function setFederationRuntime(action) {
     const response = await fetch(`${API}/federated/${action}`, { method: "POST", headers: headers() });
-    const data = await response.json(); setNotice(response.ok ? data.message || `Federated runtime ${action === "start" ? "started" : "stopped"}.` : data.detail || "Could not control federated runtime.");
+    const data = await response.json(); setNotice(response.ok ? data.message || `Local inference ${action === "start" ? "started" : "stopped"}.` : data.detail || "Could not control local inference.");
     refresh();
   }
   useEffect(() => { refresh(); }, []);
@@ -99,14 +99,12 @@ export default function HostDashboard() {
         </article>
       </section>
       <article className="panel cluster-instructions"><div className="panel-heading"><div><h2>Cluster assistant instructions</h2><p className="muted">Saved in this DocRAG group’s database cluster and used for this group’s answers. Kin settings stay on Kin.</p></div></div><form onSubmit={saveInstructions}><textarea aria-label="Cluster assistant instructions" rows={4} maxLength={4000} value={instructions} onChange={event => setInstructions(event.target.value)} placeholder="Set response style and group specific guidance…"/><button className="primary-btn" type="submit">Save instructions</button></form></article>
-      <article className="panel cluster-instructions"><div className="panel-heading"><div><h2>Federated General bot runtime</h2><p className="muted">This starts the local Hugging Face inference service and this group’s Flower SuperNode. The coordinator must be TLS enabled and have this client registered.</p></div></div>
-        <form onSubmit={saveFederation} className="federation-config"><label>Flower coordinator address<input value={federation.superlink_address} onChange={e => setFederation({...federation, superlink_address:e.target.value})} placeholder="coordinator.example.org:9092" required /></label>
-          <label>Coordinator CA certificate path<input value={federation.root_cert_path} onChange={e => setFederation({...federation, root_cert_path:e.target.value})} placeholder="C:\\certs\\ca.pem" required /></label>
-          <label>This cluster’s Flower private key path<input type="password" autoComplete="off" value={federation.private_key_path} onChange={e => setFederation({...federation, private_key_path:e.target.value})} placeholder="C:\\certs\\cluster-private.key" required /></label>
+      <article className="panel cluster-instructions"><div className="panel-heading"><div><h2>Federated General bot (use only)</h2><p className="muted">This group only uses the shared adapter for its General bot. Its documents are never used for training and this group does not join the federation. The General bot sends the question and this group's retrieved excerpts only to the inference service on this machine.</p></div></div>
+        <form onSubmit={saveFederation} className="federation-config"><label>Aggregated adapter folder (copied from the coordinator)<input value={federation.adapter_dir} onChange={e => setFederation({...federation, adapter_dir:e.target.value})} placeholder="C:\\DocRAG\\federated-adapters" required /></label>
           <label>Local inference port<input type="number" min="1024" max="65535" value={federation.inference_port} onChange={e => setFederation({...federation, inference_port:Number(e.target.value)})} required /></label>
-          <button className="primary-btn" type="submit">Save federation settings</button></form>
-        {federationStatus && <p className="muted small-text">Flower: {federationStatus.flower_available ? "available" : "not installed"} · missing packages: {federationStatus.missing_packages.join(", ") || "none"} · client: {Object.values(federationStatus.processes).includes("running") ? "running" : "stopped"} · aggregate: {federationStatus.inference?.ready ? `ready (round ${federationStatus.inference.round})` : "not received yet"}</p>}
-        <div className="form-actions"><button className="primary-btn" type="button" onClick={() => setFederationRuntime("start")}>Start local client and inference</button><button className="secondary-btn" type="button" onClick={() => setFederationRuntime("stop")}>Stop runtime</button></div>
+          <button className="primary-btn" type="submit">Save settings</button></form>
+        {federationStatus && <p className="muted small-text">Missing packages: {federationStatus.missing_packages.join(", ") || "none"} · inference service: {Object.values(federationStatus.processes).includes("running") ? "running" : "stopped"} · aggregate: {federationStatus.inference?.ready ? `ready (round ${federationStatus.inference.round})` : "not received yet"}</p>}
+        <div className="form-actions"><button className="primary-btn" type="button" onClick={() => setFederationRuntime("start")}>Start local inference</button><button className="secondary-btn" type="button" onClick={() => setFederationRuntime("stop")}>Stop inference</button></div>
       </article>
       <button className="text-danger" onClick={() => navigate("/user")}>Open user chat</button>
     </main></div>;
